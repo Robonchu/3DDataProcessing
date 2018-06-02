@@ -1,0 +1,7 @@
+<launch>
+  <node pkg="depth_segmentation" type="segmentation_object.py" name="segmentation" output="screen" required="true" >
+    <remap from="color_image" to="/camera/color/image_raw" />
+    <remap from="depth_image" to="/camera/depth/image_rect_raw" />
+    <remap from="depth_camera_info" to="/camera/depth/camera_info" />
+  </node>
+</launch>
