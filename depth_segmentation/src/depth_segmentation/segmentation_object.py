@@ -13,10 +13,89 @@ from sensor_msgs.msg import Image
 from sensor_msgs.msg import PointCloud2
 import sensor_msgs.point_cloud2 as pc2
 
+import random
+
 _TIME_WINDOW_SIZE = 2
 _DIFF_LENGTH = 30
 _MINIMUM_RANGE = 300
 _MAXIMUM_RANGE = 600
+_EDGE_THRESHOLD = 0.85
+#_EDGE_THRESHOLD = 0.75
+
+def get8n(x, y, shape):
+    out = []
+    maxx = shape[1]-1
+    maxy = shape[0]-1
+
+    #top left
+    outx = min(max(x-1,0),maxx)
+    outy = min(max(y-1,0),maxy)
+    out.append((outx,outy))
+
+    #top center
+    outx = x
+    outy = min(max(y-1,0),maxy)
+    out.append((outx,outy))
+
+    #top right
+    outx = min(max(x+1,0),maxx)
+    outy = min(max(y-1,0),maxy)
+    out.append((outx,outy))
+
+    #left
+    outx = min(max(x-1,0),maxx)
+    outy = y
+    out.append((outx,outy))
+
+    #right
+    outx = min(max(x+1,0),maxx)
+    outy = y
+    out.append((outx,outy))
+
+    #bottom left
+    outx = min(max(x-1,0),maxx)
+    outy = min(max(y+1,0),maxy)
+    out.append((outx,outy))
+
+    #bottom center
+    outx = x
+    outy = min(max(y+1,0),maxy)
+    out.append((outx,outy))
+
+    #bottom right
+    outx = min(max(x+1,0),maxx)
+    outy = min(max(y+1,0),maxy)
+    out.append((outx,outy))
+
+    return out
+
+# https://stackoverflow.com/questions/43923648/region-growing-python
+def region_growing(img, seed):
+    print "here3"
+    
+    list = []
+    outimg = np.zeros(img.shape+(3,), dtype=np.float32)
+    list.append((seed[0], seed[1]))
+
+    random_color = [random.randint(1, 255), random.randint(1, 255), random.randint(1, 255)]
+
+    processed = []
+    count = 0
+    while(len(list) > 0):
+        count += 1
+        print count
+        if count > 10000:
+            break
+        pix = list[0]
+        outimg[pix[0], pix[1]] = random_color
+        for coord in get8n(pix[0], pix[1], img.shape):
+            if img[coord[0], coord[1]] != 0:
+                outimg[coord[0], coord[1]] = random_color
+                if not coord in processed:
+                    list.append(coord)
+                processed.append(coord)
+        list.pop(0)
+    return outimg.astype(np.uint8)
 
 def time_averaging_filter(images):
 
@@ -59,7 +138,7 @@ def edge_search(image):
             sw = np.dot(image[y][x], image[y-1][x+1])
             w = np.dot(image[y][x], image[y-1][x])
             dot8 = np.array([nw, n, ne, e, se, s, sw, w])
-            edge_flag = dot8 < 0.85
+            edge_flag = dot8 < _EDGE_THRESHOLD
             if True in edge_flag:
                 edge_image[y][x] = 0
             else:
@@ -72,7 +151,7 @@ def closing(image):
                             [1, 1, 1],
                             [1, 1, 1]],
                            np.uint8)
-
+    
     img_dst = cv2.morphologyEx(image, cv2.MORPH_CLOSE, neiborhood8)
     return img_dst
 
@@ -91,6 +170,8 @@ class SegmentationObject:
             "segmentation_image", Image, queue_size=10)
         self._edge_image_pub = rospy.Publisher(
             "edge_image", Image, queue_size=10)
+        self._patch_image_pub = rospy.Publisher(
+            "patch_image", Image, queue_size=10)
         self._segmentation_pcd_pub = rospy.Publisher(
             "segmentation_pcd", PointCloud2)
         depth_camera_info = rospy.wait_for_message(
@@ -118,9 +199,6 @@ class SegmentationObject:
         # median filter 3 x 3
         seg_region = cv2.medianBlur(seg_region, ksize=3)
         seg_region = closing(seg_region)
-        #seg_region = cv2.medianBlur(seg_region, ksize=5)
-        #seg_region = cv2.GaussianBlur(seg_region,(5,5),0)
-        
         seg_region = seg_region.astype(np.float32)
     
         self._store_image.append(seg_region)
@@ -139,13 +217,23 @@ class SegmentationObject:
         edge_region = closing(edge_region)
         
         # publish sgementation image for debug
+        print "publish seg_region"
+        self._segmentation_image_pub.publish(self._cvbridge.cv2_to_imgmsg(
+            seg_region))
+
         print "publish edge_region"
         self._edge_image_pub.publish(self._cvbridge.cv2_to_imgmsg(
             edge_region))
 
-        print "publish seg_region"
-        self._segmentation_image_pub.publish(self._cvbridge.cv2_to_imgmsg(
-            seg_region))
+        cv2.imwrite("test.png", edge_region)
+
+        print "here0"
+        if int(edge_region[300][320]) == 255:
+            print "here1"
+            patch_region = region_growing(edge_region, (300,320))
+            print "publish patch_region"
+            self._patch_image_pub.publish(self._cvbridge.cv2_to_imgmsg(
+                patch_region))
         
         # TODO: speeding up for loop
         object_points = []
