@@ -19,8 +19,9 @@ _TIME_WINDOW_SIZE = 2
 _DIFF_LENGTH = 30
 _MINIMUM_RANGE = 300
 _MAXIMUM_RANGE = 600
-_EDGE_THRESHOLD = 0.85
-#_EDGE_THRESHOLD = 0.75
+#_EDGE_THRESHOLD = 0.85
+_EDGE_THRESHOLD = 0.90
+_DEPTH_RATE = 1.5
 
 def get8n(x, y, shape):
     out = []
@@ -70,9 +71,7 @@ def get8n(x, y, shape):
     return out
 
 # https://stackoverflow.com/questions/43923648/region-growing-python
-def region_growing(img, seed):
-    print "here3"
-    
+def region_growing(img, seed):    
     list = []
     outimg = np.zeros(img.shape+(3,), dtype=np.float32)
     list.append((seed[0], seed[1]))
@@ -98,7 +97,6 @@ def region_growing(img, seed):
     return outimg.astype(np.uint8)
 
 def time_averaging_filter(images):
-
     mod_images = []
     for frame in range(len(images)-1):
         # diff_image = abs(images[frame+1]-images[frame])
@@ -113,14 +111,26 @@ def time_averaging_filter(images):
     ave_image = 1.0 * sum(mod_images) / len(mod_images)
     return ave_image.astype(np.float32)
 
+# # normal calculation change
+# def normal_calculation(image):
+#     normal_image = np.zeros(image.shape+(3,), dtype=np.float32)
+#     for x in range(1,image.shape[1]):
+#         for y in range(1,image.shape[0]):
+#             t = np.array([x,y-1,image[y-1][x]*_DEPTH_RATE])
+#             l = np.array([x-1,y,image[y][x-1]*_DEPTH_RATE])
+#             c = np.array([x,y,image[y][x]*_DEPTH_RATE])
+#             d = np.cross((l-c), (t-c))
+#             normal_d = 1.0 * d / np.linalg.norm(d)
+#             normal_image[y][x] = normal_d
+#     return normal_image
+
 def normal_calculation(image):
     normal_image = np.zeros(image.shape+(3,), dtype=np.float32)
-    for x in range(1,image.shape[1]):
-        for y in range(1,image.shape[0]):
-            t = np.array([x,y-1,image[y-1][x]])
-            l = np.array([x-1,y,image[y][x-1]])
-            c = np.array([x,y,image[y][x]])
-            d = np.cross((l-c), (t-c))
+    for x in range(1,image.shape[1]-1):
+        for y in range(1,image.shape[0]-1):
+            dzdx = (image[y][x+1] - image[y][x-1]) / 2.0
+            dzdy = (image[y+1][x] - image[y-1][x]) / 2.0
+            d = np.array([-dzdx, -dzdy, 1.0])
             normal_d = 1.0 * d / np.linalg.norm(d)
             normal_image[y][x] = normal_d
     return normal_image
@@ -139,6 +149,8 @@ def edge_search(image):
             w = np.dot(image[y][x], image[y-1][x])
             dot8 = np.array([nw, n, ne, e, se, s, sw, w])
             edge_flag = dot8 < _EDGE_THRESHOLD
+            
+            # TODO:condition change
             if True in edge_flag:
                 edge_image[y][x] = 0
             else:
@@ -197,7 +209,9 @@ class SegmentationObject:
         # extract 300 ~ 600 [mm] points
         seg_region = np.where((depth_array > _MAXIMUM_RANGE) | (depth_array < _MINIMUM_RANGE), 0.0, depth_array)
         # median filter 3 x 3
-        seg_region = cv2.medianBlur(seg_region, ksize=3)
+        #seg_region = cv2.medianBlur(seg_region, ksize=3)
+        #seg_region = cv2.medianBlur(seg_region, ksize=3)
+        seg_region = cv2.medianBlur(seg_region, ksize=7)
         seg_region = closing(seg_region)
         seg_region = seg_region.astype(np.float32)
     
@@ -210,11 +224,13 @@ class SegmentationObject:
         # do time averaging 
         seg_region = time_averaging_filter(self._store_image)
 
+        # TODO: check noise
         normal_image = normal_calculation(seg_region)
         normal_blur_image = cv2.GaussianBlur(normal_image,(5,5),0)
 
         edge_region = edge_search(normal_blur_image)
         edge_region = closing(edge_region)
+        edge_region = np.where(seg_region < 1, 0, edge_region)
         
         # publish sgementation image for debug
         print "publish seg_region"
@@ -227,13 +243,11 @@ class SegmentationObject:
 
         cv2.imwrite("test.png", edge_region)
 
-        print "here0"
-        if int(edge_region[300][320]) == 255:
-            print "here1"
-            patch_region = region_growing(edge_region, (300,320))
-            print "publish patch_region"
-            self._patch_image_pub.publish(self._cvbridge.cv2_to_imgmsg(
-                patch_region))
+        # if int(edge_region[300][320]) == 255:
+        #     patch_region = region_growing(edge_region, (300,320))
+        #     print "publish patch_region"
+        #     self._patch_image_pub.publish(self._cvbridge.cv2_to_imgmsg(
+        #         patch_region))
         
         # TODO: speeding up for loop
         object_points = []
